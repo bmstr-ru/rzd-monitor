@@ -13,7 +13,7 @@ func init() {
 		panic(err)
 	}
 	bot = newBot
-	bot.Debug = true
+	//bot.Debug = true
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 }
 

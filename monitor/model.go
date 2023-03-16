@@ -28,7 +28,7 @@ type Monitor struct {
 }
 
 func (m *Monitor) ToString() string {
-	return "Номер отслеживания: " + strconv.FormatInt(m.Id, 10) + ":\n" +
+	return "Номер отслеживания: " + strconv.FormatInt(m.Id, 10) + "\n" +
 		"От: " + m.From.Name + "\n" +
 		"До: " + m.To.Name + "\n" +
 		"Дата: " + formatDate(m.Date) + "\n" +
