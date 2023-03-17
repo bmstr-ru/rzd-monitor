@@ -6,7 +6,7 @@ import (
 
 type Station struct {
 	Name string
-	Id   int64
+	Id   string
 }
 
 type Date struct {
@@ -20,11 +20,12 @@ type Train struct {
 }
 
 type Monitor struct {
-	Id    int64
-	From  *Station
-	To    *Station
-	Train *Train
-	Date  Date
+	Id     int64
+	ChatId int64
+	From   *Station
+	To     *Station
+	Train  *Train
+	Date   Date
 }
 
 func (m *Monitor) ToString() string {

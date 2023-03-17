@@ -17,11 +17,24 @@ func init() {
 }
 
 func FindMonitors(chatId int64) []monitor.Monitor {
-	rows, err := db.Query("select id, from_station_id, from_station_name, to_station_id, to_station_name, departure_day, departure_month, departure_year, train_number from monitors where chat_id = ?", chatId)
+	rows, err := db.Query("select id, chat_id, from_station_id, from_station_name, to_station_id, to_station_name, departure_day, departure_month, departure_year, train_number from monitors where chat_id = ? and scheduled = 1", chatId)
 	if err != nil {
 		panic(err)
 	}
 	defer rows.Close()
+	return mapToMonitor(rows)
+}
+
+func GetScheduledMonitors() []monitor.Monitor {
+	rows, err := db.Query("select id, chat_id, from_station_id, from_station_name, to_station_id, to_station_name, departure_day, departure_month, departure_year, train_number from monitors where scheduled = 1")
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+	return mapToMonitor(rows)
+}
+
+func mapToMonitor(rows *sql.Rows) []monitor.Monitor {
 	var monitors []monitor.Monitor
 	for rows.Next() {
 		monitor := monitor.Monitor{
@@ -31,8 +44,9 @@ func FindMonitors(chatId int64) []monitor.Monitor {
 			Date:  monitor.Date{},
 		}
 
-		err = rows.Scan(
+		err := rows.Scan(
 			&monitor.Id,
+			&monitor.ChatId,
 			&monitor.From.Id,
 			&monitor.From.Name,
 			&monitor.To.Id,
@@ -72,9 +86,18 @@ func DeleteMonitors(chatId int64) {
 	})
 }
 
+func Deactivate(id int64) {
+	inTx(func(tx *sql.Tx) {
+		_, err := tx.Exec("update monitors set scheduled = 0 where id = ?", id)
+		if err != nil {
+			panic(err)
+		}
+	})
+}
+
 func StoreMonitor(mon *monitor.Monitor) {
 	inTx(func(tx *sql.Tx) {
-		stmt, err := tx.Prepare("update monitors set from_station_id = ?, from_station_name = ?, to_station_id = ?, to_station_name = ?, departure_day = ?, departure_month = ?, departure_year = ?, train_number = ? where id = ?")
+		stmt, err := tx.Prepare("update monitors set from_station_id = ?, from_station_name = ?, to_station_id = ?, to_station_name = ?, departure_day = ?, departure_month = ?, departure_year = ?, train_number = ?, scheduled = 1 where id = ?")
 		if err != nil {
 			panic(err)
 		}

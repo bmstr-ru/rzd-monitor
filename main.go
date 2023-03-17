@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bmstr.ru/rzd-monitor/api"
 	"bmstr.ru/rzd-monitor/monitor"
 	"bmstr.ru/rzd-monitor/persistence"
+	"bmstr.ru/rzd-monitor/rzd"
 	"bmstr.ru/rzd-monitor/telegram"
 	"context"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -167,22 +167,31 @@ func inputDate(ctx context.Context, event *fsm.Event) {
 }
 
 func processInputStart(ctx context.Context, stationName string) {
-	station := api.FindStation(stationName)
-	if station == nil {
-		sendMessage(ctx, "Не смог найти такую станцию :(")
-		requestInputStart(ctx, nil)
-	} else {
-		currentFSM.Event(ctx, "input-start", station)
-	}
+	processInputStation(ctx, stationName, requestInputStart, "input-start")
 }
 
 func processInputFinish(ctx context.Context, stationName string) {
-	station := api.FindStation(stationName)
-	if station == nil {
+	processInputStation(ctx, stationName, requestInputFinish, "input-finish")
+}
+
+func processInputStation(ctx context.Context, stationName string, callback fsm.Callback, successEvent string) {
+	stations, err := rzd.FindStation(stationName)
+	if err != nil {
+		sendMessage(ctx, "Ой, что-то пошло не так\nПопробуйте ввечти название станции ещё раз")
+		panic(err)
+	}
+	if stations == nil {
 		sendMessage(ctx, "Не смог найти такую станцию :(")
-		requestInputFinish(ctx, nil)
+		callback(ctx, nil)
+	} else if len(stations) > 1 {
+		foundNames := ""
+		for _, station := range stations {
+			foundNames += station.Name + "\n"
+		}
+		sendMessage(ctx, "Нашёл несколько похожих станций:\n"+foundNames)
+		sendMessage(ctx, "Попробуйте ввести более точное название станции")
 	} else {
-		currentFSM.Event(ctx, "input-finish", station)
+		currentFSM.Event(ctx, successEvent, stations[0])
 	}
 }
 
