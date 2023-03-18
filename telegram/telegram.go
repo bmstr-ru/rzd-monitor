@@ -13,7 +13,7 @@ func init() {
 		panic(err)
 	}
 	bot = newBot
-	//bot.Debug = true
+	bot.Debug = true
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 }
 
@@ -25,6 +25,6 @@ func Updates() tgbotapi.UpdatesChannel {
 
 func Send(chatId int64, msg string) {
 	if _, err := bot.Send(tgbotapi.NewMessage(chatId, msg)); err != nil {
-		log.Panic(err)
+		log.Println(err)
 	}
 }

@@ -155,7 +155,7 @@ func suggestStations(station string) (string, error) {
 		"&TransportType=rail,suburban,bus,aeroexpress"
 	request, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 	return performRequest(request)
 }

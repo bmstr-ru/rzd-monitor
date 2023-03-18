@@ -4,15 +4,22 @@ import (
 	"bmstr.ru/rzd-monitor/monitor"
 	"bmstr.ru/rzd-monitor/persistence"
 	"bmstr.ru/rzd-monitor/rzd"
+	"bmstr.ru/rzd-monitor/schedule"
 	"bmstr.ru/rzd-monitor/telegram"
 	"context"
+	"errors"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/looplab/fsm"
+	"strconv"
 	"time"
 )
 
 var currentFSM *fsm.FSM
 var mon *monitor.Monitor
+
+func init() {
+	schedule.Start()
+}
 
 func main() {
 	mainContext := context.Background()
@@ -20,9 +27,13 @@ func main() {
 
 	for update := range telegram.Updates() {
 		if update.Message == nil {
+			telegram.Info("Got non message update")
 			continue
 		}
 
+		telegram.Info("Got message: chatId=" + strconv.FormatInt(update.Message.Chat.ID, 10) +
+			", userId=" + update.Message.From.UserName +
+			", text=" + update.Message.Text)
 		ctx := contexts[update.Message.From.ID]
 		if ctx == nil {
 			ctx = context.WithValue(mainContext, "UserId", update.Message.From.ID)
@@ -72,6 +83,8 @@ func commands(ctx context.Context, update tgbotapi.Update) {
 		printMonitors(ctx)
 	case "deleteall":
 		deleteMonitors(ctx)
+	case "shutdown":
+		telegram.Panic(errors.New("Got shutdown signal"))
 	default:
 		sendHelp(ctx)
 	}
@@ -176,7 +189,7 @@ func processInputStation(ctx context.Context, stationName string, callback fsm.C
 	stations, err := rzd.FindStation(stationName)
 	if err != nil {
 		sendMessage(ctx, "Ой, что-то пошло не так\nПопробуйте ввечти название станции ещё раз")
-		panic(err)
+		telegram.Error(err.Error())
 	}
 	if stations == nil {
 		sendMessage(ctx, "Не смог найти такую станцию :(")
@@ -198,7 +211,7 @@ func processInputDate(ctx context.Context, inputDate string) {
 	if err != nil {
 		sendMessage(ctx, "Неправильный формат даты, попробуйте ещё раз")
 		requestInputDate(ctx, nil)
-		return
+		telegram.Error(err.Error())
 	}
 	currentFSM.Event(ctx, "input-date", date)
 }
