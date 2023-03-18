@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"strconv"
+	"sync"
 )
 
 type Station struct {
@@ -19,13 +20,30 @@ type Train struct {
 	Number string
 }
 
+type autoInc struct {
+	sync.Mutex // ensures autoInc is goroutine-safe
+	id         int64
+}
+
+var monitorSequence = autoInc{id: 1}
+
+func ID() (id int64) {
+	monitorSequence.Lock()
+	defer monitorSequence.Unlock()
+
+	id = monitorSequence.id
+	monitorSequence.id++
+	return
+}
+
 type Monitor struct {
-	Id     int64
-	ChatId int64
-	From   *Station
-	To     *Station
-	Train  *Train
-	Date   Date
+	Id        int64
+	ChatId    int64
+	From      *Station
+	To        *Station
+	Train     *Train
+	Date      Date
+	Scheduled bool
 }
 
 func (m *Monitor) ToString() string {
@@ -34,6 +52,21 @@ func (m *Monitor) ToString() string {
 		"До: " + m.To.Name + "\n" +
 		"Дата: " + formatDate(m.Date) + "\n" +
 		"Поезд: " + m.Train.Number + "\n"
+}
+
+func (m *Monitor) ToCsvRow() []string {
+	return []string{strconv.FormatInt(m.Id, 10),
+		strconv.FormatInt(m.ChatId, 10),
+		m.From.Id,
+		m.From.Name,
+		m.To.Id,
+		m.To.Name,
+		m.Train.Number,
+		strconv.Itoa(m.Date.Year),
+		strconv.Itoa(m.Date.Month),
+		strconv.Itoa(m.Date.Day),
+		strconv.FormatBool(m.Scheduled),
+	}
 }
 
 func formatDate(d Date) string {

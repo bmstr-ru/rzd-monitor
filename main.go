@@ -15,8 +15,6 @@ var currentFSM *fsm.FSM
 var mon *monitor.Monitor
 
 func main() {
-	defer persistence.WrapUp()
-
 	mainContext := context.Background()
 	contexts := make(map[int64]context.Context)
 
@@ -96,7 +94,7 @@ func printMonitors(ctx context.Context) {
 }
 
 func startNewMonitorInput(ctx context.Context) {
-	mon = persistence.NewMonitor(ctx.Value("ChatId").(int64))
+	mon = &monitor.Monitor{Id: monitor.ID(), ChatId: ctx.Value("ChatId").(int64)}
 	currentFSM = fsm.NewFSM(
 		"initial",
 		fsm.Events{
