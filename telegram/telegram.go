@@ -6,9 +6,13 @@ import (
 )
 
 var bot *tgbotapi.BotAPI
+var prod = "6259981758:AAHBrzw35fqa7QkInwgrLb5V6yCUObYBq2c"
+var test = "5879092419:AAEv78NzNoBxLrE6OeLhr9KKNy5EisePzwE"
+
+var apiKey = test
 
 func init() {
-	newBot, err := tgbotapi.NewBotAPI("6259981758:AAHBrzw35fqa7QkInwgrLb5V6yCUObYBq2c")
+	newBot, err := tgbotapi.NewBotAPI(prod)
 	if err != nil {
 		panic(err)
 	}

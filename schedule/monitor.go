@@ -9,7 +9,7 @@ import (
 )
 
 func Start() {
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(10 * time.Minute)
 	go func() {
 		for {
 			select {
