@@ -32,7 +32,7 @@ func processMonitors() {
 			continue
 		}
 		telegram.Info("Tickets: lower=" + strconv.Itoa(freeSeats.Lower) + ", upper=" + strconv.Itoa(freeSeats.Upper))
-		if freeSeats.Lower > 0 || freeSeats.Upper > 0 {
+		if freeSeats.Lower > 0 {
 			telegram.Send(monitor.ChatId, "Нашли билеты по вашему отслеживанию:\n"+monitor.ToString())
 			telegram.Send(monitor.ChatId, "Нижние: "+strconv.Itoa(freeSeats.Lower)+" шт.")
 			telegram.Send(monitor.ChatId, "Верхние: "+strconv.Itoa(freeSeats.Upper)+" шт.")
