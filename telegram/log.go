@@ -2,7 +2,7 @@ package telegram
 
 import "log"
 
-var chatId int64 = -881739772
+var chatId int64 = -903806832
 
 func Info(msg string) {
 	log.Println(msg)
