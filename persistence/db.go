@@ -5,6 +5,7 @@ import (
 	"bmstr.ru/rzd-monitor/telegram"
 	"bufio"
 	"encoding/csv"
+	"log"
 	"os"
 	"strconv"
 )
@@ -16,12 +17,12 @@ func init() {
 }
 
 func FindMonitors(chatId int64) []*monitor.Monitor {
-	telegram.Info("Find monitors: chatId=" + strconv.FormatInt(chatId, 10))
+	log.Println("Find monitors: chatId=" + strconv.FormatInt(chatId, 10))
 	return storedMonitors[chatId]
 }
 
 func GetScheduledMonitors() []*monitor.Monitor {
-	telegram.Info("Get scheduled monitors")
+	log.Println("Get scheduled monitors")
 	monitors := []*monitor.Monitor{}
 	for _, mons := range storedMonitors {
 		for _, mon := range mons {
@@ -30,18 +31,18 @@ func GetScheduledMonitors() []*monitor.Monitor {
 			}
 		}
 	}
-	telegram.Info(strconv.Itoa(len(monitors)) + " active monitors")
+	log.Println(strconv.Itoa(len(monitors)) + " active monitors")
 	return monitors
 }
 
 func DeleteMonitors(chatId int64) {
-	telegram.Info("Delete monitors: chatId=" + strconv.FormatInt(chatId, 10))
+	log.Println("Delete monitors: chatId=" + strconv.FormatInt(chatId, 10))
 	delete(storedMonitors, chatId)
 	flush()
 }
 
 func Deactivate(id int64) {
-	telegram.Info("Deactivate monitor: id=" + strconv.FormatInt(id, 10))
+	log.Println("Deactivate monitor: id=" + strconv.FormatInt(id, 10))
 	for _, mons := range storedMonitors {
 		for _, mon := range mons {
 			if mon.Id == id {
@@ -53,7 +54,7 @@ func Deactivate(id int64) {
 }
 
 func StoreMonitor(mon *monitor.Monitor) {
-	telegram.Info("Store monitor:\n" + mon.ToString())
+	log.Println("Store monitor:\n" + mon.ToString())
 	mon.Scheduled = true
 	if storedMonitors[mon.ChatId] == nil {
 		storedMonitors[mon.ChatId] = []*monitor.Monitor{}
@@ -63,7 +64,7 @@ func StoreMonitor(mon *monitor.Monitor) {
 }
 
 func flush() {
-	telegram.Info("Flush monitors")
+	log.Println("Flush monitors")
 
 	rows := [][]string{}
 	for _, mons := range storedMonitors {

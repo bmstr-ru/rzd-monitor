@@ -10,6 +10,7 @@ import (
 	"errors"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/looplab/fsm"
+	"log"
 	"strconv"
 	"time"
 )
@@ -27,11 +28,11 @@ func main() {
 
 	for update := range telegram.Updates() {
 		if update.Message == nil {
-			telegram.Info("Got non message update")
+			log.Println("Got non message update")
 			continue
 		}
 
-		telegram.Info("Got message: chatId=" + strconv.FormatInt(update.Message.Chat.ID, 10) +
+		log.Println("Got message: chatId=" + strconv.FormatInt(update.Message.Chat.ID, 10) +
 			", userId=" + update.Message.From.UserName +
 			", text=" + update.Message.Text)
 		ctx := contexts[update.Message.From.ID]
