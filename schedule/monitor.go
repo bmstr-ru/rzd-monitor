@@ -1,16 +1,17 @@
 package schedule
 
 import (
-	"bmstr.ru/rzd-monitor/persistence"
-	"bmstr.ru/rzd-monitor/rzd"
-	"bmstr.ru/rzd-monitor/telegram"
 	"log"
 	"strconv"
 	"time"
+
+	"bmstr.ru/rzd-monitor/persistence"
+	"bmstr.ru/rzd-monitor/rzd"
+	"bmstr.ru/rzd-monitor/telegram"
 )
 
 func Start() {
-	ticker := time.NewTicker(10 * time.Minute)
+	ticker := time.NewTicker(1 * time.Minute)
 	go func() {
 		for {
 			select {
@@ -38,7 +39,7 @@ func processMonitors() {
 			telegram.Send(monitor.ChatId, "Нижние: "+strconv.Itoa(freeSeats.Lower)+" шт.")
 			telegram.Send(monitor.ChatId, "Верхние: "+strconv.Itoa(freeSeats.Upper)+" шт.")
 			telegram.Send(monitor.ChatId, "Спасибо, что воспользовались нашим сервисом!")
-			persistence.Deactivate(monitor.Id)
+			//persistence.Deactivate(monitor.Id)
 		}
 	}
 }

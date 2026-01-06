@@ -1,18 +1,17 @@
 package telegram
 
 import (
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
+	"os"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 var bot *tgbotapi.BotAPI
-var prod = "6259981758:AAHBrzw35fqa7QkInwgrLb5V6yCUObYBq2c"
-var test = "5879092419:AAEv78NzNoBxLrE6OeLhr9KKNy5EisePzwE"
-
-var apiKey = test
+var apiKey = os.Getenv("BOT_TOKEN")
 
 func init() {
-	newBot, err := tgbotapi.NewBotAPI(prod)
+	newBot, err := tgbotapi.NewBotAPI(apiKey)
 	if err != nil {
 		panic(err)
 	}
