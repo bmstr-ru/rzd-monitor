@@ -11,6 +11,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata
+COPY certificates/*.crt /usr/local/share/ca-certificates/
+RUN update-ca-certificates
 COPY --from=build /out/rzd-monitor /usr/local/bin/rzd-monitor
 USER 65532:65532
 EXPOSE 8080 8081
