@@ -3,10 +3,10 @@ package main
 import (
 	"bmstr.ru/rzd-monitor/max"
 	"bmstr.ru/rzd-monitor/monitor"
-	"bmstr.ru/rzd-monitor/persistence"
 	"bmstr.ru/rzd-monitor/rzd"
 	"context"
 	"github.com/looplab/fsm"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -18,6 +18,14 @@ type dialog struct {
 }
 type dialogContextKey struct{}
 
+type monitorRepository interface {
+	FindMonitors(context.Context, int64) ([]*monitor.Monitor, error)
+	DeleteMonitors(context.Context, int64) error
+	StoreMonitor(context.Context, *monitor.Monitor) error
+}
+
+var monitorStore monitorRepository
+
 var dialogs = make(map[dialogKey]*dialog)
 
 func session(ctx context.Context) *dialog { return ctx.Value(dialogContextKey{}).(*dialog) }
@@ -25,8 +33,10 @@ func session(ctx context.Context) *dialog { return ctx.Value(dialogContextKey{})
 func handleUpdate(update max.Update) {
 	chatID, userID, text, ok := update.Input()
 	if !ok {
+		slog.Debug("update.ignored", "update_type", update.Type)
 		return
 	}
+	slog.Info("update.received", "update_type", update.Type, "chat_id", chatID, "user_id", userID)
 	key := dialogKey{chatID, userID}
 	d := dialogs[key]
 	if d == nil {
@@ -49,6 +59,7 @@ func sendHelp(ctx context.Context) {
 }
 
 func actOnStateMachine(ctx context.Context, msg string) {
+	slog.Info("dialog.input", "chat_id", ctx.Value("ChatId"), "state", session(ctx).machine.Current())
 	switch session(ctx).machine.Current() {
 	case "get-start":
 		processInputStart(ctx, msg)
@@ -63,6 +74,7 @@ func actOnStateMachine(ctx context.Context, msg string) {
 }
 
 func commands(ctx context.Context, command string) {
+	slog.Info("command.received", "chat_id", ctx.Value("ChatId"), "command", command)
 	switch command {
 	case "newmonitor":
 		startNewMonitorInput(ctx)
@@ -80,12 +92,19 @@ func commands(ctx context.Context, command string) {
 }
 
 func deleteMonitors(ctx context.Context) {
-	persistence.DeleteMonitors(ctx.Value("ChatId").(int64))
+	if err := monitorStore.DeleteMonitors(ctx, ctx.Value("ChatId").(int64)); err != nil {
+		databaseFailure(ctx, "monitors.delete", err)
+		return
+	}
 	sendMessage(ctx, "Ваши отслеживания успешно удалены")
 }
 
 func printMonitors(ctx context.Context) {
-	monitors := persistence.FindMonitors(ctx.Value("ChatId").(int64))
+	monitors, err := monitorStore.FindMonitors(ctx, ctx.Value("ChatId").(int64))
+	if err != nil {
+		databaseFailure(ctx, "monitors.find", err)
+		return
+	}
 	if len(monitors) == 0 {
 		sendMessage(ctx, "Вы пока не отслеживаете билеты. Чтобы начать, введите команду /newmonitor")
 		return
@@ -96,7 +115,8 @@ func printMonitors(ctx context.Context) {
 }
 
 func startNewMonitorInput(ctx context.Context) {
-	session(ctx).mon = &monitor.Monitor{Id: monitor.ID(), ChatId: ctx.Value("ChatId").(int64)}
+	slog.Info("dialog.started", "chat_id", ctx.Value("ChatId"))
+	session(ctx).mon = &monitor.Monitor{ChatId: ctx.Value("ChatId").(int64)}
 	session(ctx).machine = fsm.NewFSM(
 		"initial",
 		fsm.Events{
@@ -140,7 +160,6 @@ func requestInputDate(ctx context.Context, event *fsm.Event) {
 }
 
 func printMonitor(ctx context.Context, event *fsm.Event) {
-	persistence.StoreMonitor(session(ctx).mon)
 	sendMessage(ctx, "Спасибо! Ваше отслеживание:\n"+session(ctx).mon.ToString())
 	session(ctx).mon = nil
 	session(ctx).machine = nil
@@ -164,6 +183,11 @@ func inputDate(ctx context.Context, event *fsm.Event) {
 		Day:   date.Day(),
 		Month: int(date.Month()),
 		Year:  date.Year(),
+	}
+	if err := monitorStore.StoreMonitor(ctx, session(ctx).mon); err != nil {
+		event.Cancel(err)
+		databaseFailure(ctx, "monitor.store", err)
+		sendMessage(ctx, "Повторите дату отправления, чтобы попробовать сохранить отслеживание ещё раз")
 	}
 }
 
@@ -215,4 +239,9 @@ func processInputTrain(ctx context.Context, trainNumber string) {
 
 func sendMessage(ctx context.Context, msg string) {
 	max.Send(ctx.Value("ChatId").(int64), msg)
+}
+
+func databaseFailure(ctx context.Context, operation string, err error) {
+	slog.Error("database.operation_failed", "operation", operation, "chat_id", ctx.Value("ChatId"), "error", err)
+	sendMessage(ctx, "Не удалось выполнить операцию с базой данных. Попробуйте ещё раз позже")
 }

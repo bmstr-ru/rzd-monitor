@@ -2,12 +2,13 @@
 package max
 
 import (
+	"bmstr.ru/rzd-monitor/logging"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -69,7 +70,7 @@ func New(token, baseURL string) (*Client, error) {
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
-	return &Client{token: token, baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 100 * time.Second}, nextSend: make(map[int64]time.Time)}, nil
+	return &Client{token: token, baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 100 * time.Second, Transport: &logging.Transport{Service: "max"}}, nextSend: make(map[int64]time.Time)}, nil
 }
 func (c *Client) request(ctx context.Context, method, path string, body, result interface{}) error {
 	var data io.Reader
@@ -93,8 +94,9 @@ func (c *Client) request(ctx context.Context, method, path string, body, result 
 		return fmt.Errorf("MAX request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	defer io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Do not include response bodies: they may contain private message data.
+		// The HTTP transport logs the complete response with secrets masked.
 		return fmt.Errorf("MAX %s: HTTP %d", method, resp.StatusCode)
 	}
 	if result != nil {
@@ -147,7 +149,7 @@ func (c *Client) Poll(ctx context.Context, handle func(Update)) error {
 			if ctx.Err() != nil {
 				break
 			}
-			log.Print(err)
+			slog.Error("max.poll_failed", "error", err, "retry_in_ms", 3000)
 			select {
 			case <-ctx.Done():
 				return nil
@@ -185,7 +187,7 @@ func Send(chatID int64, text string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := Default.Send(ctx, chatID, text); err != nil {
-		log.Print(err)
+		slog.Error("max.send_failed", "chat_id", chatID, "error", err)
 	}
 }
-func Error(text string) { log.Print(text) }
+func Error(text string) { slog.Error("operation.failed", "error", text) }

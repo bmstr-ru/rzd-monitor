@@ -1,10 +1,11 @@
 package rzd
 
 import (
+	"bmstr.ru/rzd-monitor/logging"
 	"bmstr.ru/rzd-monitor/monitor"
 	"bytes"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -29,11 +30,16 @@ type TrainsResponse struct {
 }
 
 type ScheduledTrain struct {
-	CarGroups   []CarGroup
-	TrainNumber string
+	CarGroups       []CarGroup
+	TrainNumber     string
+	IsSaleForbidden bool
 }
 
 type CarGroup struct {
+	CarType                     string
+	ServiceClasses              []string
+	TotalPlaceQuantity          int
+	EmptyCabinQuantity          int
 	LowerPlaceQuantity          int
 	UpperPlaceQuantity          int
 	LowerSidePlaceQuantity      int
@@ -52,11 +58,6 @@ type Suggestion struct {
 	ExpressCode string
 }
 
-type FreeSeats struct {
-	Lower int
-	Upper int
-}
-
 var client *http.Client
 
 var rzdSite = "https://ticket.rzd.ru"
@@ -67,7 +68,8 @@ func init() {
 	jar, _ := cookiejar.New(nil)
 	client = &http.Client{
 		Jar:       jar,
-		Transport: &AddHeaderTransport{T: http.DefaultTransport},
+		Transport: &AddHeaderTransport{T: &logging.Transport{Service: "rzd"}},
+		Timeout:   30 * time.Second,
 	}
 }
 
@@ -116,35 +118,6 @@ func sliceOf(station *monitor.Station) []*monitor.Station {
 	return []*monitor.Station{station}
 }
 
-func FindFreeSeats(trainNumber string, from string, to string, date time.Time) (*FreeSeats, error) {
-	response, err := requestTrains(from, to, date)
-	if err != nil {
-		return nil, err
-	}
-
-	trains, err := parseTrains(response)
-	if err != nil {
-		return nil, err
-	}
-
-	freeSeats := FreeSeats{}
-	for i := 0; i < len(trains); i++ {
-		train := trains[i]
-		if strings.HasPrefix(train.TrainNumber, trainNumber) {
-			for j := 0; j < len(train.CarGroups); j++ {
-				carGroup := train.CarGroups[j]
-				if !carGroup.HasPlacesForDisabledPersons && !carGroup.IsSaleForbidden {
-					freeSeats.Lower += carGroup.LowerPlaceQuantity
-					freeSeats.Lower += carGroup.LowerSidePlaceQuantity
-					freeSeats.Upper += carGroup.UpperPlaceQuantity
-					freeSeats.Upper += carGroup.UpperSidePlaceQuantity
-				}
-			}
-		}
-	}
-	return &freeSeats, nil
-}
-
 func suggestStations(station string) (string, error) {
 	url := baseUrl + "/api/v1/suggests" +
 		"?GroupResults=true" +
@@ -183,9 +156,12 @@ func performRequest(req *http.Request) (string, error) {
 		return "", err
 	}
 	defer response.Body.Close()
-	responseBytes, _ := io.ReadAll(response.Body)
+	responseBytes, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", fmt.Errorf("read RZD response: %w", err)
+	}
 	if response.StatusCode != 200 {
-		return "", errors.New("Error Http response: " + response.Status + "\n" + string(responseBytes))
+		return "", fmt.Errorf("RZD HTTP %s", response.Status)
 	}
 	return string(responseBytes), nil
 }

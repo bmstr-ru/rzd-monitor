@@ -1,10 +1,11 @@
 package main
 
 import (
+	"bmstr.ru/rzd-monitor/logging"
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,13 +16,23 @@ import (
 	"time"
 
 	"bmstr.ru/rzd-monitor/max"
+	"bmstr.ru/rzd-monitor/persistence"
 	"bmstr.ru/rzd-monitor/schedule"
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	if err := logging.Setup(); err != nil {
+		_ = os.Setenv("LOG_LEVEL", "INFO")
+		_ = logging.Setup()
+		slog.Error("config.invalid", "variable", "LOG_LEVEL", "error", err)
+		os.Exit(1)
 	}
+	slog.Info("bot.starting")
+	if err := run(); err != nil {
+		slog.Error("bot.failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("bot.stopped")
 }
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -41,9 +52,17 @@ func run() error {
 	if err := client.Verify(ctx); err != nil {
 		return fmt.Errorf("MAX authorization: %w", err)
 	}
-	log.Print("MAX bot authorized")
+	slog.Info("max.authorized", "mode", mode)
+	store, err := persistence.Open(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	monitorStore = store
+
 	if mode == "polling" {
-		schedule.Start()
+		stopScheduler := schedule.Start(ctx, store)
+		defer stopScheduler()
 		return client.Poll(ctx, handleUpdate)
 	}
 	endpoint := os.Getenv("MAX_WEBHOOK_URL")
@@ -82,8 +101,9 @@ func run() error {
 	if err := client.Subscribe(ctx, endpoint, secret); err != nil {
 		return err
 	}
-	schedule.Start()
-	log.Printf("MAX webhook listening on %s", addr)
+	stopScheduler := schedule.Start(ctx, store)
+	defer stopScheduler()
+	slog.Info("webhook.listening", "address", addr, "path", path)
 	// MAX retries webhooks. Ignore repeated message IDs within a bounded window.
 	seen := make(map[string]bool)
 	var order []string
@@ -100,6 +120,7 @@ func run() error {
 			if update.Type == "message_created" && update.Message != nil && update.Message.Body.MID != "" {
 				id := update.Message.Body.MID
 				if seen[id] {
+					slog.Debug("update.duplicate", "message_id", id)
 					continue
 				}
 				seen[id] = true
