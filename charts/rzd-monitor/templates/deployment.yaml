@@ -1,0 +1,122 @@
+{{- if not (has .Values.bot.mode (list "polling" "webhook")) }}
+{{- fail "bot.mode must be polling or webhook" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rzd-monitor.fullname" . }}
+  labels:
+    {{- include "rzd-monitor.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Dialogs and scheduler are local to the process; avoid overlapping bot pods.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "rzd-monitor.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rzd-monitor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: bot
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bot
+          image: {{ include "rzd-monitor.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "rzd-monitor.securityContext" . | nindent 12 }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret | quote }}
+                  key: {{ .Values.secretKeys.databaseURL | quote }}
+            - name: MAX_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret | quote }}
+                  key: {{ .Values.secretKeys.botToken | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: MAX_UPDATE_MODE
+              value: {{ .Values.bot.mode | quote }}
+            - name: MAX_API_URL
+              value: {{ .Values.bot.apiURL | quote }}
+            - name: HEALTH_LISTEN_ADDR
+              value: ":8081"
+            {{- if eq .Values.bot.mode "webhook" }}
+            - name: MAX_WEBHOOK_URL
+              value: {{ required "bot.webhookURL is required in webhook mode" .Values.bot.webhookURL | quote }}
+            - name: MAX_LISTEN_ADDR
+              value: "0.0.0.0:8080"
+            - name: MAX_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret | quote }}
+                  key: {{ .Values.secretKeys.webhookSecret | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: health
+              containerPort: 8081
+            {{- if eq .Values.bot.mode "webhook" }}
+            - name: webhook
+              containerPort: 8080
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: health
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

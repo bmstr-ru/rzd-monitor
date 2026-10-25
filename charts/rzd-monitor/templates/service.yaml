@@ -1,0 +1,17 @@
+{{- if eq .Values.bot.mode "webhook" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rzd-monitor.fullname" . }}
+  labels:
+    {{- include "rzd-monitor.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "rzd-monitor.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: bot
+  ports:
+    - name: webhook
+      port: 8080
+      targetPort: webhook
+{{- end }}

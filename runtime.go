@@ -35,6 +35,12 @@ func main() {
 	slog.Info("bot.stopped")
 }
 func run() error {
+	if len(os.Args) > 1 {
+		if len(os.Args) != 2 || os.Args[1] != "migrate" {
+			return fmt.Errorf("usage: rzd-monitor [migrate]")
+		}
+		return persistence.Migrate(context.Background(), os.Getenv("DATABASE_URL"))
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	client, err := max.New(os.Getenv("MAX_BOT_TOKEN"), os.Getenv("MAX_API_URL"))
@@ -59,6 +65,11 @@ func run() error {
 	}
 	defer store.Close()
 	monitorStore = store
+	stopHealth, err := startHealthServer(ctx, store)
+	if err != nil {
+		return err
+	}
+	defer stopHealth()
 
 	if mode == "polling" {
 		stopScheduler := schedule.Start(ctx, store)

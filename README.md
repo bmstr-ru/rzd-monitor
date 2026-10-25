@@ -17,6 +17,7 @@ cp .env.example .env
 set -a
 . ./.env
 set +a
+go run . migrate
 go run .
 ```
 
@@ -55,33 +56,50 @@ API по умолчанию: `https://platform-api2.max.ru`, токен пере
 
 ## PostgreSQL
 
-Создайте отдельную базу и пользователя, затем задайте `DATABASE_URL`:
+Используется существующая PostgreSQL-база (например, стандартная `postgres`)
+и отдельная схема `rzd_monitor`. `search_path` настраивать не нужно: все таблицы
+в запросах указаны со схемой. Пример подключения:
 
 ```dotenv
-DATABASE_URL=postgres://rzd_monitor:password@postgres:5432/rzd_monitor?sslmode=require
+DATABASE_URL=postgres://rzd_monitor:password@postgres:5432/postgres?sslmode=require
 ```
 
-Пароль со специальными символами в URL должен быть URL-encoded. Для локальной
-базы без TLS можно использовать `sslmode=disable`; для проверки сертификата
-сервера — `sslmode=verify-full` с настройкой доверенного CA.
+Пароль со специальными символами должен быть URL-encoded. Для локальной базы
+без TLS можно использовать `sslmode=disable`, для проверки сертификата сервера —
+`sslmode=verify-full` с доверенным CA. ID генерирует PostgreSQL; идентификаторы
+чатов хранятся как BIGINT, даты — DATE. Подключение — через
+[pgxpool](https://pkg.go.dev/github.com/jackc/pgx/v5/pgxpool).
 
-Бот при запуске проверяет подключение и автоматически создаёт таблицу и индексы
-из `persistence/schema.sql`. Пользователю БД нужны права на создание объектов
-в рабочей схеме и чтение/запись таблицы. Существующие записи при запуске
-не удаляются. ID генерирует PostgreSQL; идентификаторы чатов хранятся как BIGINT,
-даты — DATE. Запросы используют параметры и таймаут 10 секунд. Подключение —
-через [pgxpool](https://pkg.go.dev/github.com/jackc/pgx/v5/pgxpool).
+### Миграции
 
-В Kubernetes передайте DSN через Secret:
+Используется [golang-migrate](https://github.com/golang-migrate/migrate).
+SQL-файлы `persistence/migrations/NNNNNN_name.up.sql` встроены в бинарник.
+Команда `go run . migrate` (в контейнере — `rzd-monitor migrate`) применяет
+только новые версии; повторный запуск безопасен. История хранится в
+`rzd_monitor.schema_migrations`. PostgreSQL-блокировка предотвращает параллельное
+применение миграций. Файлы уже применённых миграций не изменяйте: добавляйте
+новый файл с очередным номером. Транзакционные миграции оборачивайте в BEGIN/COMMIT,
+как в `000001_monitors.up.sql`.
 
-```yaml
-env:
-  - name: DATABASE_URL
-    valueFrom:
-      secretKeyRef:
-        name: rzd-monitor
-        key: database-url
-```
+Миграционная команда создаёт схему `rzd_monitor`; миграции создают и обновляют
+таблицы в ней. Обычный запуск бота не выполняет DDL и проверяет версию схемы:
+если миграции не применены или состояние dirty, запуск завершится ошибкой.
+Первый запуск миграций требует права CREATE на базу и владения объектами схемы.
+Запуск рассчитан на пустую базу: схема `rzd_monitor`, таблица отслеживаний,
+индексы и таблица версий миграций создаются автоматически. Повторный запуск
+сохраняет уже созданные объекты и данные.
+
+При неуспешной миграции состояние остаётся dirty, автоматического force/reset нет.
+Сначала проверьте ошибку и фактическую структуру БД, затем вручную восстановите
+согласованное состояние и повторите запуск. Автоматического отката миграций нет:
+`helm rollback` откатывает приложение, но не базу. Новые изменения схемы должны
+быть совместимы с предыдущей версией бота, которая ещё работает во время hook Job.
+
+Можно разделить роли: миграционный пользователь владеет схемой и выполняет DDL,
+пользователь бота имеет USAGE на `rzd_monitor`, SELECT/INSERT/UPDATE/DELETE на
+`rzd_monitor.monitors`, USAGE на identity sequence и SELECT на
+`rzd_monitor.schema_migrations`. При добавлении таблиц выдавайте права в миграции
+или настройте ALTER DEFAULT PRIVILEGES у владельца объектов.
 
 Строка подключения и пароль не логируются. Операции базы пишутся в JSON-логи
 как `database.query`, ошибки — `database.operation_failed` / `scheduler.load_failed`.
@@ -92,13 +110,73 @@ CSV больше не читается и не записывается; авт�
 Незавершённые диалоги по-прежнему находятся в памяти. Запускайте одну реплику бота:
 распределённая координация планировщика и диалогов между репликами не реализована.
 
+## Docker
+
+```sh
+docker build -t registry.example.com/rzd-monitor:0.1.0 .
+# .env должна содержать DATABASE_URL, доступный из контейнера
+docker run --rm --env-file .env registry.example.com/rzd-monitor:0.1.0 migrate
+docker run --rm --env-file .env registry.example.com/rzd-monitor:0.1.0
+```
+
+Многостадийная сборка использует Go 1.27, бинарник статический; runtime содержит
+CA-сертификаты и tzdata, работает от UID/GID 65532. Миграции входят в тот же образ.
+Для Kubernetes отправьте образ в свой registry и используйте новый неизменяемый
+тег для каждого релиза. Для другой архитектуры используйте
+`docker buildx build --platform linux/arm64 ...`.
+
+## Helm
+
+Чарт находится в `charts/rzd-monitor`. PostgreSQL в чарт не входит.
+Secret с ключами `DATABASE_URL`, `MAX_BOT_TOKEN` и (для Webhook) `MAX_WEBHOOK_SECRET`
+нужно создать заранее в namespace релиза: pre-install Job запускается раньше
+обычных ресурсов чарта. Например, подготовьте файл с переменными и создайте Secret:
+
+```sh
+kubectl create namespace rzd-monitor
+kubectl -n rzd-monitor create secret generic rzd-monitor --from-env-file=.env
+helm upgrade --install rzd-monitor ./charts/rzd-monitor \
+  --namespace rzd-monitor \
+  --set image.repository=registry.example.com/rzd-monitor \
+  --set image.tag=0.1.0 \
+  --wait --timeout 5m
+```
+
+По умолчанию чарт использует polling для простого запуска. Для production задайте
+`bot.mode=webhook` и `bot.webhookURL=https://your-domain/max/webhook`.
+В этом режиме чарт создаёт ClusterIP Service на порту 8080. Настройте ваш HTTPS
+Ingress/reverse proxy на этот Service с сохранением пути Webhook; Ingress и TLS
+управляются вне чарта. `MAX_LISTEN_ADDR` в pod — `0.0.0.0:8080`.
+
+Перед каждым install/upgrade [Helm hook](https://helm.sh/docs/topics/charts_hooks/)
+запускает Job `<fullname>-migrate` с аргументом `migrate` из того же
+образа. Deployment обновляется после успешного завершения Job; при ошибке релиз
+останавливается, не обновляя Deployment. Успешный Job удаляется, неуспешный
+сохраняется до следующей попытки. Логи ошибки:
+
+```sh
+kubectl -n rzd-monitor logs job/rzd-monitor-migrate
+```
+
+Deployment содержит одну реплику и стратегию Recreate, чтобы два бота одновременно
+не опрашивали MAX и не дублировали уведомления. Это означает короткий перерыв
+при обновлении. Есть startup/liveness `/livez` и readiness `/readyz` на порту 8081;
+readiness проверяет PostgreSQL. Порт health не публикуется через Service.
+
+Настройки — в `charts/rzd-monitor/values.yaml`: образ, ресурсы, Secret, параметры
+Webhook, imagePullSecrets и дополнительные env/volumes. Через них можно подключить
+CA bundle из заранее созданного ConfigMap/Secret и задать `SSL_CERT_FILE`.
+Для отдельной роли миграций задайте `migration.existingSecret` и
+`migration.databaseURLKey`; этот Secret тоже должен существовать до установки.
+`migration.enabled=false` позволяет накатывать миграции отдельно в CI/CD.
+
 ## Проверка
 
 ```sh
 go test -race ./...
 go vet ./...
 go build ./...
-# Интеграционные тесты: отдельная тестовая БД с правом CREATE SCHEMA
+# Интеграционные тесты: пользователь с CREATEDB; тесты создают и удаляют свои базы
 TEST_DATABASE_URL='postgres://user:password@localhost:5432/test_db?sslmode=disable' go test ./persistence -v
 ```
 
@@ -131,7 +209,7 @@ env:
 состояния диалога, Webhook-запросы, проверки билетов и операции хранилища.
 `DEBUG` добавляет пропущенные/повторные события и обращения к хранилищу.
 
-Просмотр: `kubectl logs -f deployment/rzd-monitor`.
+Просмотр: `kubectl logs -f -l app.kubernetes.io/component=bot`.
 
 ## Семейное купе: четыре места вместе
 

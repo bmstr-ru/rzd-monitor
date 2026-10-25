@@ -1,0 +1,10 @@
+.git
+.idea
+.env
+.env.*
+*.csv
+*.http
+*.pem
+*.key
+rzd-monitor
+charts

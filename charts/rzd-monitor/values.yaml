@@ -1,0 +1,49 @@
+image:
+  repository: rzd-monitor
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Create the Secret before helm install; the pre-install migration Job needs it.
+existingSecret: rzd-monitor
+secretKeys:
+  databaseURL: DATABASE_URL
+  botToken: MAX_BOT_TOKEN
+  webhookSecret: MAX_WEBHOOK_SECRET
+
+bot:
+  # For production, set webhook and expose the Service through your HTTPS ingress.
+  mode: polling
+  webhookURL: ""
+  apiURL: https://platform-api2.max.ru
+logLevel: INFO
+
+migration:
+  enabled: true
+  # Optional separate Secret for a database role with DDL permissions.
+  existingSecret: ""
+  databaseURLKey: DATABASE_URL
+  activeDeadlineSeconds: 240
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# E.g. a ConfigMap containing a trusted CA bundle; mount read-only and set
+# SSL_CERT_FILE in extraEnv. These are shared by the bot and migration Job.
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []

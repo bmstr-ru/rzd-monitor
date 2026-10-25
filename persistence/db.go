@@ -2,7 +2,6 @@ package persistence
 
 import (
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,9 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-//go:embed schema.sql
-var schema string
 
 const queryTimeout = 10 * time.Second
 
@@ -44,25 +40,23 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 		pool.Close()
 		return nil, dbError("connect", err)
 	}
-	// Serialize initialization to avoid concurrent DDL races during rollout.
-	tx, err := pool.Begin(setupCtx)
+	var version uint
+	var dirty bool
+	if err := pool.QueryRow(setupCtx, `SELECT version, dirty FROM rzd_monitor.schema_migrations`).Scan(&version, &dirty); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("database schema is not ready; run rzd-monitor migrate first: %w", dbError("read migration version", err))
+	}
+	expected, err := latestMigrationVersion()
 	if err != nil {
 		pool.Close()
-		return nil, dbError("begin schema initialization", err)
+		return nil, err
 	}
-	defer tx.Rollback(context.Background())
-	if _, err = tx.Exec(setupCtx, "SELECT pg_advisory_xact_lock(791682374125)"); err == nil {
-		_, err = tx.Exec(setupCtx, schema)
-	}
-	if err == nil {
-		err = tx.Commit(setupCtx)
-	}
-	if err != nil {
-		_ = tx.Rollback(context.Background())
+	if dirty || version < expected {
 		pool.Close()
-		return nil, dbError("initialize schema", err)
+		return nil, fmt.Errorf("database schema is not ready (version=%d, required=%d, dirty=%t); run rzd-monitor migrate", version, expected, dirty)
 	}
-	slog.Info("database.ready", "storage", "postgres")
+
+	slog.Info("database.ready", "storage", "postgres", "schema", DatabaseSchema, "version", version)
 	return store, nil
 }
 func (s *Store) Close() { s.pool.Close(); slog.Info("database.closed") }
@@ -112,16 +106,16 @@ func (s *Store) find(ctx context.Context, operation, query string, args ...any) 
 	return monitors, nil
 }
 func (s *Store) FindMonitors(ctx context.Context, chatID int64) ([]*monitor.Monitor, error) {
-	return s.find(ctx, "monitors.find", `SELECT `+columns+` FROM monitors WHERE chat_id=$1 ORDER BY id`, chatID)
+	return s.find(ctx, "monitors.find", `SELECT `+columns+` FROM rzd_monitor.monitors WHERE chat_id=$1 ORDER BY id`, chatID)
 }
 func (s *Store) GetScheduledMonitors(ctx context.Context) ([]*monitor.Monitor, error) {
-	return s.find(ctx, "monitors.scheduled", `SELECT `+columns+` FROM monitors WHERE scheduled ORDER BY id`)
+	return s.find(ctx, "monitors.scheduled", `SELECT `+columns+` FROM rzd_monitor.monitors WHERE scheduled ORDER BY id`)
 }
 func (s *Store) DeleteMonitors(ctx context.Context, chatID int64) error {
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 	start := time.Now()
-	result, err := s.pool.Exec(ctx, `DELETE FROM monitors WHERE chat_id=$1`, chatID)
+	result, err := s.pool.Exec(ctx, `DELETE FROM rzd_monitor.monitors WHERE chat_id=$1`, chatID)
 	if err != nil {
 		return dbError("monitors.delete", err)
 	}
@@ -131,7 +125,7 @@ func (s *Store) DeleteMonitors(ctx context.Context, chatID int64) error {
 func (s *Store) Deactivate(ctx context.Context, id int64) error {
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
-	result, err := s.pool.Exec(ctx, `UPDATE monitors SET scheduled=FALSE WHERE id=$1`, id)
+	result, err := s.pool.Exec(ctx, `UPDATE rzd_monitor.monitors SET scheduled=FALSE WHERE id=$1`, id)
 	if err != nil {
 		return dbError("monitor.deactivate", err)
 	}
@@ -150,7 +144,7 @@ func (s *Store) StoreMonitor(ctx context.Context, mon *monitor.Monitor) error {
 	defer cancel()
 	start := time.Now()
 	var id int64
-	err := s.pool.QueryRow(ctx, `INSERT INTO monitors
+	err := s.pool.QueryRow(ctx, `INSERT INTO rzd_monitor.monitors
  (chat_id, from_station_id, from_station_name, to_station_id, to_station_name,
  departure_date, train_number) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
 		mon.ChatId, mon.From.Id, mon.From.Name, mon.To.Id, mon.To.Name, date, mon.Train.Number).Scan(&id)
@@ -160,4 +154,8 @@ func (s *Store) StoreMonitor(ctx context.Context, mon *monitor.Monitor) error {
 	mon.Id, mon.Scheduled = id, true
 	slog.Info("database.query", "operation", "monitor.store", "monitor_id", id, "chat_id", mon.ChatId, "duration_ms", time.Since(start).Milliseconds())
 	return nil
+}
+
+func (s *Store) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
 }

@@ -15,37 +15,76 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Uses an isolated schema, never the production monitors table.
-func TestPostgresPersistence(t *testing.T) {
+// Each test gets a disposable database; no objects in TEST_DATABASE_URL are changed.
+func testDatabase(t *testing.T) string {
+	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set TEST_DATABASE_URL to run PostgreSQL integration tests")
+		t.Skip("set TEST_DATABASE_URL with CREATEDB permission to run PostgreSQL integration tests")
 	}
 	ctx := context.Background()
 	admin, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close(ctx)
-	schemaName := fmt.Sprintf("rzd_test_%d", time.Now().UnixNano())
-	quoted := pgx.Identifier{schemaName}.Sanitize()
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+quoted); err != nil {
+	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	name := fmt.Sprintf("rzd_test_%d", time.Now().UnixNano())
+	quoted := pgx.Identifier{name}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+quoted); err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Exec(ctx, "DROP SCHEMA "+quoted+" CASCADE")
+	t.Cleanup(func() {
+		if _, err := admin.Exec(context.Background(), "DROP DATABASE "+quoted+" WITH (FORCE)"); err != nil {
+			t.Error(err)
+		}
+	})
 	u, err := url.Parse(dsn)
 	if err != nil || u.Scheme != "postgres" && u.Scheme != "postgresql" {
 		t.Fatal("TEST_DATABASE_URL must be a PostgreSQL URL")
 	}
-	query := u.Query()
-	query.Set("search_path", schemaName)
-	u.RawQuery = query.Encode()
-	scoped := u.String()
+	u.Path = "/" + name
+	return u.String()
+}
+
+func TestPostgresPersistence(t *testing.T) {
+	scoped := testDatabase(t)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, scoped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var schemaExists bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='rzd_monitor')`).Scan(&schemaExists); err != nil {
+		t.Fatal(err)
+	}
+	if schemaExists {
+		t.Fatal("test must start without the application schema")
+	}
+
+	if store, err := Open(ctx, scoped); err == nil {
+		store.Close()
+		t.Fatal("unmigrated database must not start")
+	}
+	if err := Migrate(ctx, scoped); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, scoped); err != nil {
+		t.Fatalf("repeated migrations must be harmless: %v", err)
+	}
+	var tableCount int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema='rzd_monitor' AND table_name IN ('monitors','schema_migrations')`).Scan(&tableCount); err != nil || tableCount != 2 {
+		t.Fatalf("migration did not create schema and tables: count=%d err=%v", tableCount, err)
+	}
 	store, err := Open(ctx, scoped)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { store.Close() }()
+	defer func() {
+		if store != nil {
+			store.Close()
+		}
+	}()
 	first := &monitor.Monitor{ChatId: 9007199254740993, From: &monitor.Station{Id: "2004720", Name: "Кемь"}, To: &monitor.Station{Id: "2004000", Name: "Санкт-Петербург"}, Train: &monitor.Train{Number: "015А"}, Date: monitor.Date{Year: 2027, Month: 1, Day: 20}}
 	if err := store.StoreMonitor(ctx, first); err != nil {
 		t.Fatal(err)
@@ -73,7 +112,7 @@ func TestPostgresPersistence(t *testing.T) {
 	if err != nil || len(active) != 1 || active[0].Id != second.Id {
 		t.Fatalf("scheduled filter: %+v, %v", active, err)
 	}
-	// Reopen: schema creation must be idempotent and rows and IDs must survive.
+	// Reopen: rows and IDs must survive; application startup performs no DDL.
 	store.Close()
 	store, err = Open(ctx, scoped)
 	if err != nil {
@@ -120,5 +159,25 @@ func TestInvalidConfigurationDoesNotLeakCredentials(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "secret-password") {
 			t.Fatalf("unexpected error: %v", err)
 		}
+	}
+}
+
+func TestDirtyMigrationPreventsStartup(t *testing.T) {
+	dsn := testDatabase(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, `UPDATE rzd_monitor.schema_migrations SET dirty=TRUE`); err != nil {
+		t.Fatal(err)
+	}
+	if store, err := Open(ctx, dsn); err == nil {
+		store.Close()
+		t.Fatal("dirty database must not start")
 	}
 }
