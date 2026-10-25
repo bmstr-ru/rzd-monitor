@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"time"
 
+	"bmstr.ru/rzd-monitor/max"
 	"bmstr.ru/rzd-monitor/persistence"
 	"bmstr.ru/rzd-monitor/rzd"
-	"bmstr.ru/rzd-monitor/telegram"
 )
 
 func Start() {
@@ -30,15 +30,15 @@ func processMonitors() {
 		log.Println("Requesting free seats\n" + monitor.ToString())
 		freeSeats, err := rzd.FindFreeSeats(monitor.Train.Number, monitor.From.Id, monitor.To.Id, date)
 		if err != nil {
-			telegram.Error(err.Error())
+			max.Error(err.Error())
 			continue
 		}
 		log.Println("Tickets: lower=" + strconv.Itoa(freeSeats.Lower) + ", upper=" + strconv.Itoa(freeSeats.Upper))
 		if freeSeats.Lower > 0 || freeSeats.Upper > 0 {
-			telegram.Send(monitor.ChatId, "Нашли билеты по вашему отслеживанию:\n"+monitor.ToString())
-			telegram.Send(monitor.ChatId, "Нижние: "+strconv.Itoa(freeSeats.Lower)+" шт.")
-			telegram.Send(monitor.ChatId, "Верхние: "+strconv.Itoa(freeSeats.Upper)+" шт.")
-			telegram.Send(monitor.ChatId, "Спасибо, что воспользовались нашим сервисом!")
+			max.Send(monitor.ChatId, "Нашли билеты по вашему отслеживанию:\n"+monitor.ToString()+
+				"\nНижние: "+strconv.Itoa(freeSeats.Lower)+" шт."+
+				"\nВерхние: "+strconv.Itoa(freeSeats.Upper)+" шт."+
+				"\nСпасибо, что воспользовались нашим сервисом!")
 			//persistence.Deactivate(monitor.Id)
 		}
 	}

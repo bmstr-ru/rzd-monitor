@@ -1,69 +1,55 @@
 package main
 
 import (
+	"bmstr.ru/rzd-monitor/max"
 	"bmstr.ru/rzd-monitor/monitor"
 	"bmstr.ru/rzd-monitor/persistence"
 	"bmstr.ru/rzd-monitor/rzd"
-	"bmstr.ru/rzd-monitor/schedule"
-	"bmstr.ru/rzd-monitor/telegram"
 	"context"
-	"errors"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/looplab/fsm"
-	"log"
-	"strconv"
+	"strings"
 	"time"
 )
 
-var currentFSM *fsm.FSM
-var mon *monitor.Monitor
-
-func init() {
-	schedule.Start()
+type dialogKey struct{ chatID, userID int64 }
+type dialog struct {
+	machine *fsm.FSM
+	mon     *monitor.Monitor
 }
+type dialogContextKey struct{}
 
-func main() {
-	mainContext := context.Background()
-	contexts := make(map[int64]context.Context)
+var dialogs = make(map[dialogKey]*dialog)
 
-	for update := range telegram.Updates() {
-		if update.Message == nil {
-			log.Println("Got non message update")
-			continue
-		}
+func session(ctx context.Context) *dialog { return ctx.Value(dialogContextKey{}).(*dialog) }
 
-		log.Println("Got message: chatId=" + strconv.FormatInt(update.Message.Chat.ID, 10) +
-			", userId=" + update.Message.From.UserName +
-			", text=" + update.Message.Text)
-		ctx := contexts[update.Message.From.ID]
-		if ctx == nil {
-			ctx = context.WithValue(mainContext, "UserId", update.Message.From.ID)
-			contexts[update.Message.From.ID] = ctx
-		}
-		ctx = context.WithValue(ctx, "ChatId", update.Message.Chat.ID)
-
-		if update.Message.IsCommand() {
-			commands(ctx, update)
-		} else {
-			message(ctx, update)
-		}
+func handleUpdate(update max.Update) {
+	chatID, userID, text, ok := update.Input()
+	if !ok {
+		return
 	}
-}
-
-func message(ctx context.Context, update tgbotapi.Update) {
-	if currentFSM != nil {
-		actOnStateMachine(ctx, update.Message.Text)
+	key := dialogKey{chatID, userID}
+	d := dialogs[key]
+	if d == nil {
+		d = &dialog{}
+		dialogs[key] = d
+	}
+	ctx := context.WithValue(context.Background(), "ChatId", chatID)
+	ctx = context.WithValue(ctx, dialogContextKey{}, d)
+	if strings.HasPrefix(text, "/") {
+		commands(ctx, strings.TrimPrefix(strings.Fields(text)[0], "/"))
+	} else if d.machine != nil {
+		actOnStateMachine(ctx, text)
 	} else {
 		sendHelp(ctx)
 	}
 }
 
 func sendHelp(ctx context.Context) {
-	sendMessage(ctx, "Привет! Чтобы начать работу со мной запусти одну из команд:\n/newmonitor\n/monitors\n/deleteall")
+	sendMessage(ctx, "Привет! Чтобы начать работу со мной запусти одну из команд:\n/newmonitor\n/monitors\n/deleteall\n/cancel")
 }
 
 func actOnStateMachine(ctx context.Context, msg string) {
-	switch currentFSM.Current() {
+	switch session(ctx).machine.Current() {
 	case "get-start":
 		processInputStart(ctx, msg)
 	case "get-finish":
@@ -76,16 +62,18 @@ func actOnStateMachine(ctx context.Context, msg string) {
 	}
 }
 
-func commands(ctx context.Context, update tgbotapi.Update) {
-	switch update.Message.Command() {
+func commands(ctx context.Context, command string) {
+	switch command {
 	case "newmonitor":
 		startNewMonitorInput(ctx)
 	case "monitors":
 		printMonitors(ctx)
 	case "deleteall":
 		deleteMonitors(ctx)
-	case "shutdown":
-		telegram.Panic(errors.New("Got shutdown signal"))
+	case "cancel":
+		session(ctx).machine = nil
+		session(ctx).mon = nil
+		sendMessage(ctx, "Создание отслеживания отменено")
 	default:
 		sendHelp(ctx)
 	}
@@ -108,8 +96,8 @@ func printMonitors(ctx context.Context) {
 }
 
 func startNewMonitorInput(ctx context.Context) {
-	mon = &monitor.Monitor{Id: monitor.ID(), ChatId: ctx.Value("ChatId").(int64)}
-	currentFSM = fsm.NewFSM(
+	session(ctx).mon = &monitor.Monitor{Id: monitor.ID(), ChatId: ctx.Value("ChatId").(int64)}
+	session(ctx).machine = fsm.NewFSM(
 		"initial",
 		fsm.Events{
 			{Name: "prepare", Src: []string{"initial"}, Dst: "get-start"},
@@ -132,7 +120,7 @@ func startNewMonitorInput(ctx context.Context) {
 		},
 	)
 
-	currentFSM.Event(ctx, "prepare")
+	session(ctx).machine.Event(ctx, "prepare")
 }
 
 func requestInputStart(ctx context.Context, event *fsm.Event) {
@@ -152,26 +140,27 @@ func requestInputDate(ctx context.Context, event *fsm.Event) {
 }
 
 func printMonitor(ctx context.Context, event *fsm.Event) {
-	persistence.StoreMonitor(mon)
-	sendMessage(ctx, "Спасибо! Ваше отслеживание:\n"+mon.ToString())
-	mon = nil
+	persistence.StoreMonitor(session(ctx).mon)
+	sendMessage(ctx, "Спасибо! Ваше отслеживание:\n"+session(ctx).mon.ToString())
+	session(ctx).mon = nil
+	session(ctx).machine = nil
 }
 
 func inputStart(ctx context.Context, event *fsm.Event) {
-	mon.From = event.Args[0].(*monitor.Station)
+	session(ctx).mon.From = event.Args[0].(*monitor.Station)
 }
 
 func inputFinish(ctx context.Context, event *fsm.Event) {
-	mon.To = event.Args[0].(*monitor.Station)
+	session(ctx).mon.To = event.Args[0].(*monitor.Station)
 }
 
 func inputTrain(ctx context.Context, event *fsm.Event) {
-	mon.Train = event.Args[0].(*monitor.Train)
+	session(ctx).mon.Train = event.Args[0].(*monitor.Train)
 }
 
 func inputDate(ctx context.Context, event *fsm.Event) {
 	date := event.Args[0].(time.Time)
-	mon.Date = monitor.Date{
+	session(ctx).mon.Date = monitor.Date{
 		Day:   date.Day(),
 		Month: int(date.Month()),
 		Year:  date.Year(),
@@ -189,8 +178,9 @@ func processInputFinish(ctx context.Context, stationName string) {
 func processInputStation(ctx context.Context, stationName string, callback fsm.Callback, successEvent string) {
 	stations, err := rzd.FindStation(stationName)
 	if err != nil {
-		sendMessage(ctx, "Ой, что-то пошло не так\nПопробуйте ввечти название станции ещё раз")
-		telegram.Error(err.Error())
+		sendMessage(ctx, "Ой, что-то пошло не так\nПопробуйте ввести название станции ещё раз")
+		max.Error(err.Error())
+		return
 	}
 	if stations == nil {
 		sendMessage(ctx, "Не смог найти такую станцию :(")
@@ -203,7 +193,7 @@ func processInputStation(ctx context.Context, stationName string, callback fsm.C
 		sendMessage(ctx, "Нашёл несколько похожих станций:\n"+foundNames)
 		sendMessage(ctx, "Попробуйте ввести более точное название станции")
 	} else {
-		currentFSM.Event(ctx, successEvent, stations[0])
+		session(ctx).machine.Event(ctx, successEvent, stations[0])
 	}
 }
 
@@ -212,16 +202,17 @@ func processInputDate(ctx context.Context, inputDate string) {
 	if err != nil {
 		sendMessage(ctx, "Неправильный формат даты, попробуйте ещё раз")
 		requestInputDate(ctx, nil)
-		telegram.Error(err.Error())
+		max.Error(err.Error())
+		return
 	}
-	currentFSM.Event(ctx, "input-date", date)
+	session(ctx).machine.Event(ctx, "input-date", date)
 }
 
 func processInputTrain(ctx context.Context, trainNumber string) {
 	train := monitor.Train{Number: trainNumber}
-	currentFSM.Event(ctx, "input-train", &train)
+	session(ctx).machine.Event(ctx, "input-train", &train)
 }
 
 func sendMessage(ctx context.Context, msg string) {
-	telegram.Send(ctx.Value("ChatId").(int64), msg)
+	max.Send(ctx.Value("ChatId").(int64), msg)
 }

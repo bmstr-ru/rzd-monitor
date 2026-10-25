@@ -1,14 +1,17 @@
 package persistence
 
 import (
+	"bmstr.ru/rzd-monitor/max"
 	"bmstr.ru/rzd-monitor/monitor"
-	"bmstr.ru/rzd-monitor/telegram"
 	"bufio"
 	"encoding/csv"
 	"log"
 	"os"
 	"strconv"
+	"sync"
 )
+
+var storageMu sync.Mutex
 
 var storedMonitors map[int64][]*monitor.Monitor
 
@@ -17,17 +20,27 @@ func init() {
 }
 
 func FindMonitors(chatId int64) []*monitor.Monitor {
+	storageMu.Lock()
+	defer storageMu.Unlock()
 	log.Println("Find monitors: chatId=" + strconv.FormatInt(chatId, 10))
-	return storedMonitors[chatId]
+	result := make([]*monitor.Monitor, 0, len(storedMonitors[chatId]))
+	for _, mon := range storedMonitors[chatId] {
+		copy := *mon
+		result = append(result, &copy)
+	}
+	return result
 }
 
 func GetScheduledMonitors() []*monitor.Monitor {
+	storageMu.Lock()
+	defer storageMu.Unlock()
 	log.Println("Get scheduled monitors")
 	monitors := []*monitor.Monitor{}
 	for _, mons := range storedMonitors {
 		for _, mon := range mons {
 			if mon.Scheduled {
-				monitors = append(monitors, mon)
+				copy := *mon
+				monitors = append(monitors, &copy)
 			}
 		}
 	}
@@ -36,12 +49,16 @@ func GetScheduledMonitors() []*monitor.Monitor {
 }
 
 func DeleteMonitors(chatId int64) {
+	storageMu.Lock()
+	defer storageMu.Unlock()
 	log.Println("Delete monitors: chatId=" + strconv.FormatInt(chatId, 10))
 	delete(storedMonitors, chatId)
 	flush()
 }
 
 func Deactivate(id int64) {
+	storageMu.Lock()
+	defer storageMu.Unlock()
 	log.Println("Deactivate monitor: id=" + strconv.FormatInt(id, 10))
 	for _, mons := range storedMonitors {
 		for _, mon := range mons {
@@ -54,6 +71,8 @@ func Deactivate(id int64) {
 }
 
 func StoreMonitor(mon *monitor.Monitor) {
+	storageMu.Lock()
+	defer storageMu.Unlock()
 	log.Println("Store monitor:\n" + mon.ToString())
 	mon.Scheduled = true
 	if storedMonitors[mon.ChatId] == nil {
@@ -72,9 +91,10 @@ func flush() {
 			rows = append(rows, mon.ToCsvRow())
 		}
 	}
-	f, err := os.Create("monitors.csv")
+	f, err := os.Create("max-monitors.csv")
 	if err != nil {
-		telegram.Error(err.Error())
+		max.Error(err.Error())
+		return
 	}
 	defer f.Close()
 	buf := bufio.NewWriter(f)
@@ -82,13 +102,13 @@ func flush() {
 	w := csv.NewWriter(buf)
 	err = w.WriteAll(rows)
 	if err != nil {
-		telegram.Error(err.Error())
+		max.Error(err.Error())
 	}
 	if err := w.Error(); err != nil {
-		telegram.Error(err.Error())
+		max.Error(err.Error())
 	}
 	err = buf.Flush()
 	if err != nil {
-		telegram.Error(err.Error())
+		max.Error(err.Error())
 	}
 }
